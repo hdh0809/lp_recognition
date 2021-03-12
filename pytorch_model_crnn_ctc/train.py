@@ -9,8 +9,9 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
+# import torchvision.models as models
 
-PICS_PATH = "../data/train"
+PICS_PATH = "/home/yxy/project/car_plate/data/train"
 
 CHARS = {"京": 0, "沪": 1, "津": 2, "渝": 3, "冀": 4, "晋": 5, "蒙": 6, "辽": 7, "吉": 8, "黑": 9, "苏": 10,
          "浙": 11, "皖": 12, "闽": 13, "赣": 14, "鲁": 15, "豫": 16, "鄂": 17, "湘": 18, "粤": 19, "桂": 20,
@@ -44,7 +45,7 @@ class CarPlateLoader(Dataset):
 
     def __getitem__(self, item):
         img = cv.imread(PICS_PATH + "/" + self.pics[item])
-        img = cv.resize(img, (160, 32))
+        # img = cv.resize(img, (160, 32))
         r, g, b = cv.split(img)
         numpy_array = np.array([r, g, b])
         label = self.pics[item][0:7]
@@ -64,6 +65,7 @@ class FeatureMap(torch.nn.Module):
         self.batch = batch
 
     def forward(self, x):
+        # 分块
         x = torch.split(x, 2, dim=3)
         tl = []
         for i in range(len(x)):
@@ -98,7 +100,7 @@ class VGG16(nn.Module):
         self.conv5_1 = nn.Conv2d(512, 512, 3) # 512 * 12 * 12
         self.conv5_2 = nn.Conv2d(512, 512, 3, padding=(1, 1)) # 512 * 12 * 12
         self.conv5_3 = nn.Conv2d(512, 512, 3, padding=(1, 1)) # 512 * 12 * 12
-        self.maxpool5 = nn.MaxPool2d((2, 2), padding=(1, 1)) # pooling 512 * 7 * 7
+        self.maxpool5 = nn.MaxPool2d((3, 3), padding=(1, 1)) # pooling 512 * 7 * 7
         
         # view
         
@@ -140,13 +142,13 @@ class VGG16(nn.Module):
         out = F.relu(out)
         out = self.maxpool4(out) # 14
         
-        # out = self.conv5_1(out) # 12
-        # out = F.relu(out)
-        # out = self.conv5_2(out) # 12
-        # out = F.relu(out)
-        # out = self.conv5_3(out) # 12
-        # out = F.relu(out)
-        # out = self.maxpool5(out) # 7
+        out = self.conv5_1(out) # 12
+        out = F.relu(out)
+        out = self.conv5_2(out) # 12
+        out = F.relu(out)
+        out = self.conv5_3(out) # 12
+        out = F.relu(out)
+        out = self.maxpool5(out) # 7
         
         # 展平
         # out = out.view(in_size, -1)
@@ -176,7 +178,7 @@ class Net(torch.nn.Module):
         # self.gru1 = nn.GRU(32*16, 128, num_layers=self.num_layers, bidirectional=True, dropout=0.3)
         self.lstm = nn.LSTM(32*16, 128, num_layers=self.num_layers, bidirectional=True, dropout=0.3)
 
-        self.fm = FeatureMap(self.batch)
+        # self.fm = FeatureMap(self.batch)
         self.fc = nn.Linear(256, 66)
         #2*10  4*20 8*40 16*80 32*160
 
@@ -188,9 +190,12 @@ class Net(torch.nn.Module):
         # x = F.leaky_relu(self.conv4(x))
         # x = F.max_pool2d(x, (2, 2))
         x = self.vgg16(x)
-        x = self.fm(x)
+        b, c, h, w = x.size()
+        assert h == 1
+        # x = self.fm(x)
+        x = x.squeeze(2)
         # 维度转换
-        x = x.permute(1, 0, 2)
+        x = x.permute(2, 0, 1)
         # x, h = self.gru1(x)
         x, h = self.lstm(x)
         x = self.fc(x)
@@ -200,9 +205,9 @@ class Net(torch.nn.Module):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('epoes', type=int, default=30, help='train epoes')
-    parser.add_argument('lr', type=float, default=0.0001, help='train epoes')
-    parser.add_argument('batch', type=int, default=10, help='batch size')
+    parser.add_argument('--epoes', type=int, default=30, help='train epoes')
+    parser.add_argument('--lr', type=float, default=0.0001, help='train epoes')
+    parser.add_argument('--batch', type=int, default=10, help='batch size')
     return parser.parse_args()
 
 
@@ -214,8 +219,8 @@ def main(args):
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda" if use_cuda else "cpu")
     model = Net(args.batch, device, 2).to(device)
-    if os.path.exists("car_plate.pt"):
-        model.load_state_dict(torch.load("car_plate.pt"))
+    # if os.path.exists("car_plate.pt"):
+    #     model.load_state_dict(torch.load("car_plate.pt"))
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = StepLR(optimizer, step_size=10, gamma=0.9)
     for i in range(args.epoes):
@@ -244,7 +249,7 @@ def main(args):
                       ",random check: label is " + parseOutput(label_tensor[0]) + " ,network predict is " + parseOutput(indexs))
         scheduler.step()
 
-    torch.save(model.state_dict(), "car_plate.pt")
+    torch.save(model.state_dict(), "car_plate_vgg16.pt")
 
 
 if __name__ == '__main__':
